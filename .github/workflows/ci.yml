@@ -1,0 +1,83 @@
+name: CI (reusable)
+
+# Reusable CI workflow called by every repo in the Scott-Builds-AI org.
+# Consumers reference it as:
+#   uses: Scott-Builds-AI/.github/.github/workflows/ci.yml@main
+#
+# See docs/SUPABASE.md and docs/DEPLOY.md in the hub repo for the convention.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version
+        type: string
+        default: "20"
+      pnpm-version:
+        description: pnpm version
+        type: string
+        default: "9"
+      package-manager:
+        description: "npm | pnpm"
+        type: string
+        default: "pnpm"
+      run-lint:
+        type: boolean
+        default: true
+      run-typecheck:
+        type: boolean
+        default: true
+      run-test:
+        type: boolean
+        default: true
+      run-build:
+        type: boolean
+        default: true
+      working-directory:
+        type: string
+        default: "."
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: ${{ inputs.package-manager == 'pnpm' }}
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+
+      - name: Install dependencies (pnpm)
+        if: ${{ inputs.package-manager == 'pnpm' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Install dependencies (npm)
+        if: ${{ inputs.package-manager == 'npm' }}
+        run: npm ci
+
+      - name: Lint
+        if: ${{ inputs.run-lint }}
+        run: ${{ inputs.package-manager }} run lint --if-present
+
+      - name: Typecheck
+        if: ${{ inputs.run-typecheck }}
+        run: ${{ inputs.package-manager }} run typecheck --if-present
+
+      - name: Test
+        if: ${{ inputs.run-test }}
+        run: ${{ inputs.package-manager }} run test --if-present
+
+      - name: Build
+        if: ${{ inputs.run-build }}
+        run: ${{ inputs.package-manager }} run build --if-present
