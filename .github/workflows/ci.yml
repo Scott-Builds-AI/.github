@@ -68,16 +68,19 @@ jobs:
 
       - name: Lint
         if: ${{ inputs.run-lint }}
-        run: ${{ inputs.package-manager }} run lint --if-present
+        # `--if-present` must precede the script name for pnpm and yarn to
+        # treat it as a flag rather than pass it through as an argument to
+        # `lint`. npm honours both orderings; pnpm and yarn don't.
+        run: ${{ inputs.package-manager }} run --if-present lint
 
       - name: Typecheck
         if: ${{ inputs.run-typecheck }}
-        run: ${{ inputs.package-manager }} run typecheck --if-present
+        run: ${{ inputs.package-manager }} run --if-present typecheck
 
       - name: Test
         if: ${{ inputs.run-test }}
-        run: ${{ inputs.package-manager }} run test --if-present
+        run: ${{ inputs.package-manager }} run --if-present test
 
       - name: Build
         if: ${{ inputs.run-build }}
-        run: ${{ inputs.package-manager }} run build --if-present
+        run: ${{ inputs.package-manager }} run --if-present build
