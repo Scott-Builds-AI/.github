@@ -1,0 +1,127 @@
+name: Tool Deploy (reusable)
+
+# Reusable deploy workflow for OpenKey AI tools running on the edge tier
+# (Cloudflare Workers via OpenNext).
+#
+# Tool repos call it on push to main:
+#
+#   # .github/workflows/deploy.yml
+#   name: Deploy
+#   on:
+#     push:
+#       branches: [main]
+#   jobs:
+#     deploy:
+#       uses: Scott-Builds-AI/.github/.github/workflows/tool-deploy.yml@main
+#       secrets:
+#         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+#
+# Both secrets are required. Either drop them into each tool's repo
+# settings, or push them once at the org level
+# (https://github.com/organizations/Scott-Builds-AI/settings/secrets/actions)
+# with "All repositories" visibility — that way every tool inherits them.
+#
+# Concurrency: configured so two rapid pushes to main don't race the
+# deploy. The newer commit cancels the older in-flight run.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version
+        type: string
+        default: "20"
+      pnpm-version:
+        description: pnpm major version
+        type: string
+        default: "9"
+      wrangler-env:
+        description: |
+          Optional Wrangler environment name. Tools that publish to
+          multiple environments (e.g. `staging`, `production`) override
+          this from the caller workflow. Empty string = the default
+          (top-level) wrangler.jsonc config.
+        type: string
+        default: ""
+      working-directory:
+        description: Where the tool's package.json + wrangler.jsonc live.
+        type: string
+        default: "."
+      run-contract-scan:
+        description: |
+          Run okai-scan before deploying. Defaults to true — tools should
+          not deploy code that violates the contract, even if CI on the
+          merge commit slipped through somehow.
+        type: boolean
+        default: true
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        description: Cloudflare API token with Workers Edit + Account R/W
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        description: Cloudflare account id (32-char hex)
+        required: true
+
+concurrency:
+  # One deploy per tool repo at a time. Re-pushing to main while a deploy
+  # is in flight cancels the older one — we want the newest commit live,
+  # not whichever finishes first.
+  group: tool-deploy-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Contract scan
+        if: ${{ inputs.run-contract-scan }}
+        # Belt and braces — CI should have caught this, but a tool that
+        # bypassed CI (rebase + force-push, admin merge over failing
+        # checks) shouldn't be able to deploy contract-violating code.
+        run: pnpm exec okai-scan
+
+      - name: OpenNext Cloudflare build
+        run: pnpm exec opennextjs-cloudflare build
+
+      - name: Deploy with Wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.wrangler-env }}" ]; then
+            pnpm exec wrangler deploy --env "${{ inputs.wrangler-env }}"
+          else
+            pnpm exec wrangler deploy
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Tool deploy"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Wrangler env: \`${{ inputs.wrangler-env || '(default)' }}\`"
+            echo "- Result: ${{ job.status }}"
+          } >> "${GITHUB_STEP_SUMMARY}"

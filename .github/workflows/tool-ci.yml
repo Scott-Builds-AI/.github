@@ -1,0 +1,101 @@
+name: Tool CI (reusable)
+
+# Reusable CI workflow for any OpenKey AI tool repo.
+#
+# Runs on every PR + push to main. Lighter weight than the package CI
+# (`ci.yml`) — adds the `okai-scan` contract check, drops the npm/yarn
+# variants (tools all use pnpm), and never tries to publish.
+#
+# Tool repos call it with a one-file stub:
+#
+#   # .github/workflows/ci.yml
+#   name: CI
+#   on:
+#     pull_request:
+#       branches: [main]
+#     push:
+#       branches: [main]
+#   jobs:
+#     ci:
+#       uses: Scott-Builds-AI/.github/.github/workflows/tool-ci.yml@main
+#
+# Override any input via `with:` — see the inputs block below.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version
+        type: string
+        default: "20"
+      pnpm-version:
+        description: pnpm major version
+        type: string
+        default: "9"
+      run-build:
+        description: |
+          Run `pnpm build`. Defaults to false because the deploy workflow
+          rebuilds anyway and tools rarely benefit from a separate
+          CI-time build. Set true if your tool relies on build-time
+          codegen that should fail fast.
+        type: boolean
+        default: false
+      run-test:
+        description: Run `pnpm test --if-present`.
+        type: boolean
+        default: true
+      working-directory:
+        description: Where the tool's package.json lives.
+        type: string
+        default: "."
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        # Aliased to `tsc --noEmit` in the template's package.json; if a
+        # tool author adds eslint later this still runs whatever they
+        # mapped `lint` to.
+        run: pnpm run --if-present lint
+
+      - name: Typecheck
+        run: pnpm run --if-present typecheck
+
+      - name: Test
+        if: ${{ inputs.run-test }}
+        run: pnpm run --if-present test
+
+      - name: Contract scan (okai-scan)
+        # The Phase 9 scanner enforces the tool contract:
+        #   - <HubHeader /> imported AND mounted in a layout
+        #   - no @openkeyai/sdk/_internal/* imports
+        #   - tool.json valid against the schema
+        # We invoke through `pnpm exec` so any version pinned in the tool's
+        # devDependencies wins over `latest` — the scanner's rule set is
+        # versioned and a tool should be able to lock its CI to a known
+        # set of rules.
+        run: pnpm exec okai-scan
+
+      - name: Build
+        if: ${{ inputs.run-build }}
+        run: pnpm run --if-present build
